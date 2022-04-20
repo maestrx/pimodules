@@ -190,7 +190,7 @@ class picoUPS:
 			with open(self.args.fw_file,"rb") as f:
 				lnum = 0
 				for line in f:
-					line=line.strip()
+					line=line.strip().decode('utf-8')
 					lnum += 1
 					target = re.match( r"^:([a-fA-F0-9]{2})([a-fA-F0-9]{2})([a-fA-F0-9]{2})([a-fA-F0-9]{2})([a-fA-F0-9]*)([a-fA-F0-9]{2})$", line, re.M|re.I|re.DOTALL)
 					if len(target.group(5))/2 != int(target.group(1),16):
