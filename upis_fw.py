@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 # -*- coding: utf8 -*-
 #===============================================================================
 #
@@ -24,10 +24,8 @@
 # TODO:         
 # - Script pre-requisities verification & installation (configure boot params, enable I2C&serial, etc). /boot/config.txt: dtparam=i2c_arm=on dtparam=i2c1_baudrate=25000
 # - Script parametrization of: verbosity, serial port, serial baudrate, progress bar type, fw file, etc (accept script arguments)
-# - Input FW file consistency verification (can be disabled)
 # - Switch to bootloader mode in the script instead of the bash command line (can be disabled)
 # - Check that the FW in the file is newer than the one already running (overridable) Is it possible to get the FW version via I2C? Or only via serial?
-# - Make it py2 & py3 compatible (https://python-future.org/compatible_idioms.html)
 # - Manage the pico_i2c.service
 # - Enable RTC
 # - Install pip2
@@ -45,6 +43,7 @@ import serial
 import time
 import sys
 import logging
+import re
 from progress.bar import Bar
 
 class upsPico:
@@ -57,68 +56,45 @@ class upsPico:
         self.firmware_filename = sys.argv[1]
         self.serial_baudrate = 9600 
         self.serial_port = '/dev/serial0'
-        
+
+        if self.validate_file():
+            logging.info('Firmware file verification OK.')
+        else:
+            return None
+
         try:
             self.upis = serial.Serial(port=self.serial_port,baudrate=self.serial_baudrate,timeout=0.001,rtscts=0,xonxoff=True)
         except:
             logging.exception('Failed to open serial port')
+            return None
 
         if self.send_line(":020000040000FA\r"):
             logging.info('Serial link with UPIS verified')
-            self.send_file()
         else:
             logging.error('Failed to confirm serial communication with UPIS')
+            return None
 
-    """
-    4) Verify the content of the provided FW file by:
-            a) validating crc
-            b) validating format
-            c) validating passed data syntax
-    """
-    def validate(self):
-        valid=False
-        #count number of lines
-        lnum=1
-        # open the FW file
+        if self.send_file():
+            logging.info('Firmware update completed')
+
+    def validate_file(self):
+        eof = False
         f = open(self.firmware_filename)
-        # for each file line
+        lnum = 0
         for line in f:
-            #static  LEN ADDR1 ADDR2 TYPE  DATA     CKSUM
-            #:       04  05    00    00    50EF2EF0 9A
-            # parse the line
-            target = re.match( r"^:([a-fA-F0-9]{2})([a-fA-F0-9]{2})([a-fA-F0-9]{2})([a-fA-F0-9]{2})([a-fA-F0-9]*)([a-fA-F0-9]{2}).$", line, re.M|re.I|re.DOTALL)
-            # in case the data field does not have correct size
-            if len(target.group(5))%2!=0:
-                print "KO\nLine",lnum,': Invalid bytecode message!'
-                sys.exit(4)
-            # get the CRC valucalculate CRC
-            crc1=int(line[-4:-1],16)
-            # calculate the CRC value of the data read
-            crc2=0    
-            for i in range(1, len(line)-5, 2):
-                #print line[i:i+2] 
-                crc2+=int(line[i:i+2],16)
-            # python cannot simulate byte overruns, so ugly math to be done 
-            crc2%=256
-            crc2=255-crc2+1
-            crc2%=256
-            # validate the CRC :)
-            if crc1!=crc2:
-                print "KO\nLine",lnum,': Invalid bytecode checksum! Defined:', crc1,'Calculated:', crc2
-                sys.exit(4)
-        
-            # in case that the done command is detected, than finish
-            if target.group(4)=='01':
-                valid=True
-                break
-            lnum+=1
-        # close the FW file
-        f.close()
-        if not valid:
-            print "KO\n Termination signature not found in the firmware file."
-            sys.exit(4)
-        else:
-            print 'OK'
+            line=line.strip()
+            lnum += 1
+            target = re.match( r"^:([a-fA-F0-9]{2})([a-fA-F0-9]{2})([a-fA-F0-9]{2})([a-fA-F0-9]{2})([a-fA-F0-9]*)([a-fA-F0-9]{2})$", line, re.M|re.I|re.DOTALL)
+            if len(target.group(5))/2 != int(target.group(1),16):
+                logging.error('Firmware file verification failed. Invalid data length on line {0}'.format(lnum))
+                return False
+            if sum(int(line[i:i+2],16) for i in range(1, len(line), 2)) % 256:
+                logging.error('Firmware file verification failed. Invalid checksum on line {0}'.format(lnum))
+                return False
+            if target.group(4) == '01':
+                return True
+        logging.error('Firmware file verification failed. End Of File record not found')
+        return False
 
     def send_file(self):
         try:
@@ -135,6 +111,7 @@ class upsPico:
                 if line[7:9]=='01':  # this is the last FW file line
                     break
             bar.finish()
+            return True
         except:
             logging.exception('Failed to process firmware file')
             return False
@@ -232,4 +209,4 @@ sudo nano /lib/udev/hwclock-set
 sudo hwclock -w
 
 
-''
+'''
