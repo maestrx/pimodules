@@ -2,33 +2,32 @@
 # -*- coding: utf8 -*-
 #===============================================================================
 #
-# USAGE:        TBD
+# USAGE:        Firmware update: pico.py -f ups_pico4_main.hex
 #
-# DESCRIPTION:
-#               This script uploads firmware to UPIS.
+# DESCRIPTION:	Toolkit to manage RPi used with UPIS
+# 
+# UPDATES: 		Fetch the latest version from: https://github.com/maestrx/pimodules
 #
-# RETURN CODES: TBD
+# RETURN CODES: 0 - OK
+#				1 - Wrong command line parameters
+#				2 - FW update failed
+#				3 - System setup failed
 #
-# OPTIONS:      ---
-# REQUIREMENTS: TBD
+# REQUIREMENTS: pip3 install serial smbus progress
 #
-# BUGS:         ---
-# NOTES:
-# - Intel HEX file docs: https://en.wikipedia.org/wiki/Intel_HEX
-# - One line fw update: # i2cget -y 1 0x69 0x38 w && i2cset -y 1 0x6b 0x00 0xff && sleep 2 && ./upis_fw.py ups_pico4_main_testing1.hex && sleep 5 && i2cget -y 1 0x69 0x38 w
+# BUGS:         TBD
 # AUTHOR:       Vit SAFAR <PIco@safar.info>
-# VERSION:      POC release 6
-# CREATED:      16.4.2022
-# REVISION:     TBD
+# VERSION:      v0.1, 8.5.2022
+# HISTORY:      v0.1, 8.5.2022, Initial release
+#
+# VALIDATED ON: RPi4 with UPS Pico HV4.0B/C
 #
 # TODO:         
 # - Script pre-requisities verification & installation (configure boot params, enable I2C&serial, etc). /boot/config.txt: dtparam=i2c_arm=on dtparam=i2c1_baudrate=25000
 # - Check that the FW in the file is newer than the one already running (overridable) 
 # - Manage the pico_i2c.service
 # - Enable RTC
-# - Install pip2
-#   wget https://bootstrap.pypa.io/pip/2.7/get-pip.py
-#   python2 get-pip.py
+# - Manage OS return codes properly
 #
 #===============================================================================
 
@@ -39,7 +38,6 @@ import logging
 import re
 import argparse
 import hashlib
-
 
 class picoUPS:
 	args = None
@@ -52,6 +50,7 @@ class picoUPS:
 		logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(message)s' )
 		self.parse_args()
 
+	# parse command args and run appropriate action
 	def parse_args(self):
 		parser = argparse.ArgumentParser(description='PICO toolkit')
 		parser.add_argument("-v", "--verbose", dest="verbose", help='', action="count", default=0)
@@ -73,6 +72,7 @@ class picoUPS:
 		
 		self.args = parser.parse_args()
 
+		# set output verbosity
 		# NOTSET<DEBUG<INFO<WARNING<ERROR<CRITICAL
 		if self.args.verbose > 1:
 			logging.getLogger().setLevel(logging.DEBUG)
@@ -83,47 +83,72 @@ class picoUPS:
 		elif self.args.verbose < 1:
 			logging.getLogger().setLevel(logging.WARNING)
 
+		# detect capabilities of teh system
 		self.get_capabilities()
 
 		# FW upload action
 		if self.args.fw_file:
-			self.upload_firmware()
+			if self.upload_firmware():
+				sys.exit(0)
+			else:
+				sys.exit(2)
+
 		# Config setup action
 		elif self.args.config_setup:
-			self.config_setup()
+			if self.config_setup():
+				sys.exit(0)
+			else:
+				sys.exit(3)
+
 		# Show help action
 		else:
 			parser.print_help(sys.stderr)
 			sys.exit(1)
 
+	# detect avaialble system features
 	def get_capabilities(self):
 		try:
 			import progress.bar
 			self.capability['progress'] = progress.bar
+			logging.debug('Capability "progress" is available')
 		except:
 			self.capability['progress'] = None
+			logging.debug('Capability "progress" is NOT available')
 
 		try:
 			import serial
 			self.capability['serial'] = serial
+			logging.debug('Capability "serial" is available')
 		except:
 			self.capability['serial'] = None
+			logging.debug('Capability "serial" is NOT available')
 
 		try:
 			import smbus
 			self.capability['smbus'] = smbus
+			logging.debug('Capability "smbus" is available')
 		except:
 			self.capability['smbus'] = None
+			logging.debug('Capability "smbus" is NOT available')
+
 		logging.info('Python capabilities: progress:{0} serial:{1} smbus:{2}'.format(self.capability['progress'] is not None, self.capability['serial'] is not None, self.capability['smbus'] is not None))
 
+	# setup system features, TODO
 	def config_setup(self):
-		pass
+		logging.debug('Running "config setup" mode')
+		return False
 
+	# initiate FW update
 	def upload_firmware(self):
+		logging.debug('Running "firmware update" mode')
+		logging.debug('FW upload params: fw_file:{0} serial_port:{1} baud_rate:{2} skip_fw_verify:{3} fw_verify_only:{4} skip_fw_md5:{5} skip_i2c_fw:{6} skip_i2c_bl:{7} skip_i2c_reset:{8} i2c_bl_local:{9}'.format(self.args.fw_file, self.args.serial_port, self.args.baud_rate, self.args.skip_fw_verify, self.args.fw_verify_only, self.args.skip_fw_md5, self.args.skip_i2c_fw, self.args.skip_i2c_bl, self.args.skip_i2c_reset, self.args.i2c_bl_local))
+		
+		# check serial is avaialble
 		if self.capability['serial'] is None:
 			logging.error('Python module serial not available')
 			return False
 
+		# validate integrity of the provided FW file
 		if self.args.skip_fw_verify:
 			logging.info('Skipping firmware verification')
 		else:
@@ -133,21 +158,47 @@ class picoUPS:
 				return False
 		
 		if self.args.fw_verify_only:
+			logging.debug('Firmware file validation only mode')
 			return True
 
+		# set UPIS to bootloader mode before FW update
 		if self.capability['smbus'] is not None:
-			i2cbus = self.capability['smbus'].SMBus(1)
+			try:
+				i2cbus = self.capability['smbus'].SMBus(1)
+			except:
+				logging.exception('Failed to initialize I2C bus 1 on RPi.')
+				return False
 			if not self.args.skip_i2c_fw:
-				self.orig_fw_version = i2cbus.read_word_data(0x69, 0x38) # get FW version
+				try:
+					self.orig_fw_version = i2cbus.read_word_data(0x69, 0x38) # get FW version
+				except:
+					logging.exception('Failed to read current FW version from UPIS via I2C. Is UPIS in running mode?')
+					return False
 				logging.warning('Current firmware release: {0}'.format(hex(self.orig_fw_version)))
 
 			if not self.args.skip_i2c_bl:
-				if not self.args.i2c_bl_local:
-					i2cbus.write_byte_data(0x6b, 0x00, 0xff) # local BL
+				if self.args.i2c_bl_local:
+					logging.debug('Enabling local BL')
+					try:
+						i2cbus.write_byte_data(0x6b, 0x00, 0xff) # local BL
+					except:
+						logging.exception('Failed to set local BL mode on UPIS via I2C. Is UPIS in running mode?')
+						return False
 				else:
-					i2cbus.write_byte_data(0x6b, 0x00, 0xbb) # remote BL
+					logging.debug('Enabling remote BL')
+					try:
+						i2cbus.write_byte_data(0x6b, 0x00, 0xbb) # remote BL
+					except:
+						logging.exception('Failed to set remote BL mode on UPIS via I2C. Is UPIS in running mode?')
+						return False
 				time.sleep(1)
+			else:
+				logging.debug('smbus capability not available, skipping bootloader config')
+		else:
+			logging.debug('smbus capability not available, skipping bootloader config')
 
+
+		# connect to UPIS via Serial
 		try:
 			logging.debug('Opening serial port {0} with baudrate {1}bps'.format(self.args.serial_port,self.args.baud_rate))
 			self.pico_serial = self.capability['serial'].Serial(port=self.args.serial_port, baudrate=self.args.baud_rate, timeout=0.001, rtscts=0, xonxoff=True)
@@ -156,27 +207,41 @@ class picoUPS:
 			logging.exception('Failed to open serial port')
 			return False
 
+		# test serial connectivity with UPIS
+		time.sleep(0.5)
 		if self.send_line(":020000040000FA\r"):
 			logging.warning('Serial link with PICO UPS verified')
 		else:
 			logging.error('Failed to establish serial communication with PICO UPS')
 			return False
 
+		# do FW update
 		if self.send_file():
 
+			# perform UPIS factory reset
 			if self.capability['smbus'] is not None:
-				time.sleep(1)
 				if not self.args.skip_i2c_reset:
-					i2cbus.write_byte_data(0x6b, 0x00, 0xdd) # factory reset
+					time.sleep(1)
+					try:
+						i2cbus.write_byte_data(0x6b, 0x00, 0xdd) # factory reset
+					except:
+						logging.exception('Failed to perform factory reset on UPIS via I2C.')
+						return False
+
 				if not self.args.skip_i2c_fw:
-					self.new_fw_version = i2cbus.read_word_data(0x69, 0x38) # get FW version
-					logging.warning('New firmware release: {0}'.format(hex(self.orig_fw_version)))			
+					time.sleep(1)
+					try:
+						self.new_fw_version = i2cbus.read_word_data(0x69, 0x38) # get FW version
+						logging.warning('New firmware release: {0}'.format(hex(self.orig_fw_version)))			
+					except:
+						logging.exception('Failed to get new FW version on UPIS via I2C.')
+						return False
 
 			logging.warning('Firmware update completed')
 			return True
 		return False
 
-
+	# test integrity of teh provided FW file
 	def validate_file(self):
 		try:
 			if not self.args.skip_fw_md5:
@@ -186,6 +251,7 @@ class picoUPS:
 			else:
 				logging.info('Skipping MD5 checksum')
 
+			# read FW file content and validate its content based on https://en.wikipedia.org/wiki/Intel_HEX
 			eof = False
 			with open(self.args.fw_file,"rb") as f:
 				lnum = 0
@@ -207,24 +273,32 @@ class picoUPS:
 			logging.exception('Failed to verify firmware file')
 			return False
 
+	# send FW file content to UPIS bootloader via Serial
 	def send_file(self):
 		try:
 			fw_lines_total = sum(1 for line in open(self.args.fw_file) if line.startswith(':'))
+			# use nicer progress module to show FW update process or fall back to embedded simple one
 			if self.capability['progress'] is None:
 				bar = simpleBar('Uploading firmware', fw_lines_total)
 			else:                
 				bar = self.capability['progress'].Bar('Uploading firmware', max=fw_lines_total, suffix='%(percent).1f%% - %(eta)ds')
+			
+			# run update process, send FW file line by line till the last valid command line
 			ret = True
 			f = open(self.args.fw_file)
 			lnum = 0
 			for line in f:
 				lnum += 1
+				# send line and wait for ack
 				if not self.send_line(line.strip()+"\r"):
 					logging.error('Failed to ack the line {0}'.format(lnum))
 					ret = False
 					break
-				bar.next()
-				if line[7:9]=='01':  # this is the last FW file line
+				# dont show progress output with while debug output is eanbled
+				if self.args.verbose<2:
+					bar.next()
+				# finish sending on last line
+				if line[7:9]=='01':  
 					break
 			bar.finish()
 			return ret
@@ -232,44 +306,54 @@ class picoUPS:
 			logging.exception('Failed to process firmware file')
 			return False
 
+	# send line and wait for the ack form bootloader
 	def send_line(self, line):
 		try:
 			for line in self.pico_serial:
 				pass
 			self.pico_serial.write(line.encode())
+			logging.debug('Serial line sent: {0}'.format(line))
 			return self.wait_ack()
 		except:
 			logging.exception('Failed to send data to PICO UPS')
 			return False
 
+	# wait for the bootloader to send ACK
 	def wait_ack(self):
 		try:
-			wait_iter = 100
+			wait_iter = 0
 			lineack = False
-			while wait_iter > 0:
+			while wait_iter < 300:
+				# process all lines received via serial from UPIS
 				for line in self.pico_serial:
-					if line:
-						try:
-							if line.strip()[0] == 6:
-								lineack=True
-								wait_iter = 0
-								break
-						except:
-							pass
-						try:
-							if ord(line.strip()[0])==6:
-								lineack=True
-								wait_iter = 0
-								break
-						except:
-							pass
-				wait_iter -= 1
+					logging.debug('Received over serial: {0}'.format(line))
+					try:
+						if line.strip()[0] == 6:
+							lineack=True
+							break
+					except:
+						pass
+					try:
+						if ord(line.strip()[0])==6:
+							lineack=True
+							break
+					except:
+						pass
+				# if for loop above completels without break, iterate next while
+				else:
+					wait_iter += 1
+					time.sleep(0.01)
+					continue						
+				# in case for loop above terminated with break, break the loop
+				break
+			logging.debug('Result of waiting for serial ack: {0} loops: {1}'.format(lineack, wait_iter))
 			return lineack
 		except:
 			logging.exception('Failed to recieve data ACK from UPIS')
 			return False
 
 
+# simple implementation fo the progress bar showing progress of teh FW update
 class simpleBar:
 	def __init__(self, text, total):
 		self.total = total
@@ -292,6 +376,7 @@ class simpleBar:
 		sys.stdout.flush()
 	
 
-picoUPS()
+if __name__ == "__main__":
+	picoUPS()
 
 
