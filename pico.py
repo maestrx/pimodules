@@ -17,8 +17,9 @@
 #
 # BUGS:         TBD
 # AUTHOR:       Vit SAFAR <PIco@safar.info>
-# VERSION:      v0.1, 8.5.2022
-# HISTORY:      v0.1, 8.5.2022, Initial release
+# VERSION:      v0.2, 10.5.2022
+# HISTORY:      - v0.2, 10.5/2022, I2C retry implemented, removed hardcoded sleep functions
+#			 	- v0.1, 8.5.2022, Initial release
 #
 # VALIDATED ON: RPi4 with UPS Pico HV4.0B/C
 #
@@ -45,6 +46,8 @@ class picoUPS:
 	orig_fw_version = None
 	new_fw_version = None
 	capability = {}
+	i2cbus = None
+	i2cbusid = 1
 
 	def __init__(self):
 		logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(message)s' )
@@ -163,15 +166,10 @@ class picoUPS:
 
 		# set UPIS to bootloader mode before FW update
 		if self.capability['smbus'] is not None:
-			try:
-				i2cbus = self.capability['smbus'].SMBus(1)
-			except:
-				logging.exception('Failed to initialize I2C bus 1 on RPi.')
-				return False
 			if not self.args.skip_i2c_fw:
-				try:
-					self.orig_fw_version = i2cbus.read_word_data(0x69, 0x38) # get FW version
-				except:
+				#self.orig_fw_version = i2cbus.read_word_data(0x69, 0x38) # get FW version
+				self.orig_fw_version = self.run_i2c_with_retry('rw', 0x69, 0x38)
+				if self.orig_fw_version is None:
 					logging.exception('Failed to read current FW version from UPIS via I2C. Is UPIS in running mode?')
 					return False
 				logging.warning('Current firmware release: {0}'.format(hex(self.orig_fw_version)))
@@ -179,19 +177,16 @@ class picoUPS:
 			if not self.args.skip_i2c_bl:
 				if self.args.i2c_bl_local:
 					logging.debug('Enabling local BL')
-					try:
-						i2cbus.write_byte_data(0x6b, 0x00, 0xff) # local BL
-					except:
-						logging.exception('Failed to set local BL mode on UPIS via I2C. Is UPIS in running mode?')
+					# i2cbus.write_byte_data(0x6b, 0x00, 0xff) # local BL
+					if self.run_i2c_with_retry('wb', 0x6b, 0x00, data=0xff) is None:
+						logging.error('Failed to set local BL mode on UPIS via I2C. Is UPIS in running mode?')
 						return False
 				else:
 					logging.debug('Enabling remote BL')
-					try:
-						i2cbus.write_byte_data(0x6b, 0x00, 0xbb) # remote BL
-					except:
-						logging.exception('Failed to set remote BL mode on UPIS via I2C. Is UPIS in running mode?')
+					#i2cbus.write_byte_data(0x6b, 0x00, 0xbb) # remote BL
+					if self.run_i2c_with_retry('wb', 0x6b, 0x00, data=0xbb) is None:
+						logging.error('Failed to set remote BL mode on UPIS via I2C. Is UPIS in running mode?')
 						return False
-				time.sleep(1)
 			else:
 				logging.debug('smbus capability not available, skipping bootloader config')
 		else:
@@ -208,12 +203,12 @@ class picoUPS:
 			return False
 
 		# test serial connectivity with UPIS
-		time.sleep(0.5)
-		if self.send_line(":020000040000FA\r"):
+		if self.test_serial():
 			logging.warning('Serial link with PICO UPS verified')
 		else:
 			logging.error('Failed to establish serial communication with PICO UPS')
 			return False
+		
 
 		# do FW update
 		if self.send_file():
@@ -221,25 +216,32 @@ class picoUPS:
 			# perform UPIS factory reset
 			if self.capability['smbus'] is not None:
 				if not self.args.skip_i2c_reset:
-					time.sleep(1)
-					try:
-						i2cbus.write_byte_data(0x6b, 0x00, 0xdd) # factory reset
-					except:
+					# i2cbus.write_byte_data(0x6b, 0x00, 0xff) # local BL
+					if self.run_i2c_with_retry('wb', 0x6b, 0x00, data=0xdd) is None:
 						logging.exception('Failed to perform factory reset on UPIS via I2C.')
 						return False
 
 				if not self.args.skip_i2c_fw:
-					time.sleep(1)
-					try:
-						self.new_fw_version = i2cbus.read_word_data(0x69, 0x38) # get FW version
-						logging.warning('New firmware release: {0}'.format(hex(self.orig_fw_version)))			
-					except:
-						logging.exception('Failed to get new FW version on UPIS via I2C.')
+					#self.new_fw_version = i2cbus.read_word_data(0x69, 0x38) # get FW version
+					self.new_fw_version = self.run_i2c_with_retry('rw', 0x69, 0x38)
+					if self.new_fw_version is None:
+						logging.exception('Failed to read new FW version from UPIS via I2C. Is UPIS in running mode?')
 						return False
+					logging.warning('New firmware release: {0}'.format(hex(self.new_fw_version)))
 
 			logging.warning('Firmware update completed')
 			return True
 		return False
+
+	# verify bootloader is available of serial link
+	def test_serial(self):
+		attempts = 20
+		while attempts > 0:
+			if self.send_line(":020000040000FA\r"):
+				break
+			time.sleep(0.1)
+			attempts -= 1
+
 
 	# test integrity of teh provided FW file
 	def validate_file(self):
@@ -351,6 +353,47 @@ class picoUPS:
 		except:
 			logging.exception('Failed to recieve data ACK from UPIS')
 			return False
+
+	# execute I2I operation with retry
+	def run_i2c_with_retry(self, op, device, address, *args, **kwargs):
+		max_tries = kwargs.get('max_tries', 12)
+		try_delay = kwargs.get('try_delay', 0.5)
+		data = kwargs.get('data', None)
+		if op.startswith('w') and data is None:
+			logging.error('I2C write operation requires data field')
+			return None	
+	
+		if self.i2cbus is None:
+			try:
+				logging.debug('Initializing I2C bus id: {0}'.format(self.i2cbusid))
+				self.i2cbus = self.capability['smbus'].SMBus(self.i2cbusid)
+			except:
+				logging.exception('Failed to initialize I2C bus 1 on RPi.')
+				return None
+
+		logging.debug('I2C operation {0} on device {1} with address {2} and data {3}'.format(op, device, address, data))
+
+		while max_tries > 0:
+			try:
+				if op == 'rb':
+					return self.i2cbus.read_byte_data(device, address)
+				elif op == 'rw':
+					return self.i2cbus.read_word_data(device, address)
+				elif op == 'wb':
+					return self.i2cbus.write_byte_data(device, address, kwargs.get('data', 10))
+				elif op == 'ww':
+					return self.i2cbus.write_word_data(device, address, kwargs.get('data', 10))
+				else:
+					logging.error('Unsupported I2C operation')
+					return None	
+			except IOError as e:
+				max_tries -= 1
+				logging.debug('I2C IOError. Retring again in {0}s with {0} more attempts'.format(try_delay, max_tries, address, data))
+				time.sleep(try_delay)
+			except:
+				logging.exception('Failed to perform I2C operation')
+				return None
+		return None
 
 
 # simple implementation fo the progress bar showing progress of teh FW update
