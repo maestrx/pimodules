@@ -22,6 +22,7 @@
 #			 	- v0.1, 8.5.2022, Initial release
 #
 # VALIDATED ON: RPi4 with UPS Pico HV4.0B/C
+# PYTHON:       python2 & python3
 #
 # TODO:         
 # - Script pre-requisities verification & installation (configure boot params, enable I2C&serial, etc). /boot/config.txt: dtparam=i2c_arm=on dtparam=i2c1_baudrate=25000
@@ -48,6 +49,7 @@ class picoUPS:
 	capability = {}
 	i2cbus = None
 	i2cbusid = 1
+	pico_model_list = {ord('S'): 'BC Stack', ord('A'): 'BC Advanced', ord('P'): 'BC PPoE', ord('T'): 'B Stack', ord('B'): 'B Advanced', ord('Q'): 'B PPoE'}
 
 	def __init__(self):
 		logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(message)s' )
@@ -135,6 +137,24 @@ class picoUPS:
 			logging.debug('Capability "smbus" is NOT available')
 
 		logging.info('Python capabilities: progress:{0} serial:{1} smbus:{2}'.format(self.capability['progress'] is not None, self.capability['serial'] is not None, self.capability['smbus'] is not None))
+		if self.capability['smbus'] is not None:
+			try:
+				self.pico_pcb_i2c = self.run_i2c_with_retry('rb', 0x69, 0x35)
+				self.pico_model_i2c = self.run_i2c_with_retry('rb', 0x69, 0x36)
+				if self.pico_model_i2c in self.pico_model_list:
+					pico_model = self.pico_model_list[self.pico_model_i2c]
+				else:
+					pico_model = 'UNKNOWN({0})'.format(self.pico_model_i2c)
+				logging.warning('PICO PCB version: {0} PICO model: {1}'.format(self.get_hex(self.pico_pcb_i2c), pico_model))			
+			except:
+				logging.exception('Unable to collect PICO release information')		
+
+		try:
+			self.rpi_model = open('/sys/firmware/devicetree/base/model', 'r').read()
+		except:
+			self.rpi_model = 'UNKNOWN'
+		logging.warning('RPi model: {0}'.format(self.rpi_model))
+
 
 	# setup system features, TODO
 	def config_setup(self):
@@ -235,12 +255,14 @@ class picoUPS:
 
 	# verify bootloader is available of serial link
 	def test_serial(self):
-		attempts = 20
+		logging.debug('Testing serial link with UPIS bootloader')
+		attempts = 50
 		while attempts > 0:
-			if self.send_line(":020000040000FA\r"):
-				break
+			if self.send_line(":020000040000FA\r", 50):
+				return True
 			time.sleep(0.1)
 			attempts -= 1
+		return False
 
 
 	# test integrity of teh provided FW file
@@ -309,23 +331,23 @@ class picoUPS:
 			return False
 
 	# send line and wait for the ack form bootloader
-	def send_line(self, line):
+	def send_line(self, line, ack_wait = 300):
 		try:
 			for line in self.pico_serial:
 				pass
 			self.pico_serial.write(line.encode())
 			logging.debug('Serial line sent: {0}'.format(line))
-			return self.wait_ack()
+			return self.wait_ack(ack_wait)
 		except:
 			logging.exception('Failed to send data to PICO UPS')
 			return False
 
 	# wait for the bootloader to send ACK
-	def wait_ack(self):
+	def wait_ack(self, ack_wait = 300):
 		try:
 			wait_iter = 0
 			lineack = False
-			while wait_iter < 300:
+			while wait_iter < ack_wait:
 				# process all lines received via serial from UPIS
 				for line in self.pico_serial:
 					logging.debug('Received over serial: {0}'.format(line))
@@ -371,7 +393,7 @@ class picoUPS:
 				logging.exception('Failed to initialize I2C bus 1 on RPi.')
 				return None
 
-		logging.debug('I2C operation {0} on device {1} with address {2} and data {3}'.format(op, device, address, data))
+		logging.debug('I2C operation {0} on device {1} with address {2} and data {3}'.format(op, self.get_hex(device), self.get_hex(address), self.get_hex(data)))
 
 		while max_tries > 0:
 			try:
@@ -380,9 +402,11 @@ class picoUPS:
 				elif op == 'rw':
 					return self.i2cbus.read_word_data(device, address)
 				elif op == 'wb':
-					return self.i2cbus.write_byte_data(device, address, kwargs.get('data', 10))
+					self.i2cbus.write_byte_data(device, address, kwargs.get('data', 10))
+					return True
 				elif op == 'ww':
-					return self.i2cbus.write_word_data(device, address, kwargs.get('data', 10))
+					self.i2cbus.write_word_data(device, address, kwargs.get('data', 10))
+					return True
 				else:
 					logging.error('Unsupported I2C operation')
 					return None	
@@ -393,8 +417,14 @@ class picoUPS:
 			except:
 				logging.exception('Failed to perform I2C operation')
 				return None
+		logging.debug('Unexpected situation!')
 		return None
 
+	def get_hex(self, value):
+		try:
+			return hex(value)
+		except:
+			return value
 
 # simple implementation fo the progress bar showing progress of teh FW update
 class simpleBar:
