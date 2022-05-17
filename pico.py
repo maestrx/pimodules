@@ -31,15 +31,26 @@
 # - Enable RTC
 # - Manage OS return codes properly
 #
+# if future 
+# ModuleNotFoundError: No module named 'future'
+# sudo apt install python-future
 #===============================================================================
 
 from __future__ import print_function
+try:
+	from future import standard_library
+	standard_library.install_aliases()
+except:
+	pass
+from subprocess import getoutput, getstatusoutput
 import time
 import sys
 import logging
 import re
 import argparse
 import hashlib
+import base64
+import os.path
 
 class picoUPS:
 	args = None
@@ -50,6 +61,12 @@ class picoUPS:
 	i2cbus = None
 	i2cbusid = 1
 	pico_model_list = {ord('S'): 'BC Stack', ord('A'): 'BC Advanced', ord('P'): 'BC PPoE', ord('T'): 'B Stack', ord('B'): 'B Advanced', ord('Q'): 'B PPoE'}
+    # base64.b64encode(x)
+	upis_systemd = 'CltVbml0XQpEZXNjcmlwdGlvbj1VUFMgUEljbyBHUElPIEZyZWUgUmFzcGJlcnJ5IFBpIEludGVyYWN0aW9uIFNlcnZpY2UKQWZ0ZXI9bXVsdGktdXNlci50YXJnZXQKW1NlcnZpY2VdClR5cGU9aWRsZQpFeGVjU3RhcnQ9L3NiaW4vcGljb19pMmNfc2VydmljZS5weQpTdGFuZGFyZE91dHB1dD1pbmhlcml0ClN0YW5kYXJkRXJyb3I9aW5oZXJpdApSZXN0YXJ0PWFsd2F5cwpbSW5zdGFsbF0KV2FudGVkQnk9bXVsdGktdXNlci50YXJnZXQK'
+	upis_systemd_path = '/lib/systemd/system/pico_i2c.service'
+	upis_systemd_script = 'IyEvdXNyL2Jpbi9lbnYgcHl0aG9uCiMgLSotIGNvZGluZzogdXRmLTggLSotCiMgV3JpdHRlbiBieSBJb2FubmlzIEEuIE1vdXJ0c2lhZGlzIGluZm9AcGltb2R1bGVzLmNvbQojIHRpbWVyIGJhc2VkIGludGVycnVwdCBkYWVtb24gc3VwcG9ydGluZyBVUFMgUEljbyBIVjQuMAojIFZlcnNpb24gMi4wIFJlbGFzZSBEYXRlIDAxLjAxLjIwMjEKCgppbXBvcnQgc3lzCmltcG9ydCB0aW1lCmltcG9ydCBkYXRldGltZQppbXBvcnQgb3MKaW1wb3J0IHJlCmltcG9ydCBnZXRvcHQKaW1wb3J0IHNtYnVzCmltcG9ydCB0aW1lCmltcG9ydCBkYXRldGltZQppbXBvcnQgdGhyZWFkaW5nCgojWW91IGNhbiBpbnN0YWxsIHBzdXRpbCB1c2luZzogc3VkbyBwaXAgaW5zdGFsbCBwc3V0aWwKI2ltcG9ydCBwc3V0aWwKCmkyYyA9IHNtYnVzLlNNQnVzKDEpCgoKIyMjIyMjIyMjIyMjIyMjIEZVTkNUSU9OUyAjIyMjIyMjIyMjIyMjIyMjIyMjCgpkZWYgZGVjMkJDRChpbnB1dFZhbHVlKToKICAgIHg9c3RyKGlucHV0VmFsdWUpCiAgICBCQ0RPdXQgPSAwCiAgICBmb3IgY2hhciBpbiB4OgogICAgICAgIEJDRE91dCA9IChCQ0RPdXQgPDwgNCkgKyBpbnQoY2hhcikKICAgIHJldHVybiBCQ0RPdXQKCmRlZiBnZXRDUFV0ZW1wZXJhdHVyZSgpOgogICAgcmVzID0gb3MucG9wZW4oJ3ZjZ2VuY21kIG1lYXN1cmVfdGVtcCcpLnJlYWRsaW5lKCkKICAgIGNwdV9kYXRhPXJlcy5yZXBsYWNlKCJ0ZW1wPSIsIiIpLnJlcGxhY2UoIidDCiIsIiIpCiAgICBjcHVfaW50PWludChmbG9hdChjcHVfZGF0YSkpCiAgICByZXR1cm4gZm9ybWF0KGNwdV9pbnQsIjAyZCIpCgpkZWYgdGltZXJfaW50KCk6CiAgICAjcHJpbnQgKCItLS0tLS0tLS0tLS0tLS0gREVCVUc6IFRpbWVyIEZpcmVkIC0tLS0tLS0tLS0tLS0tLSIpCiAgICB0PXRocmVhZGluZy5UaW1lcigwLjI1LCB0aW1lcl9pbnQpCiAgICB0LnN0YXJ0KCkKICAgIHRyeToKICAgICAgICBkYXRhID0gaTJjLnJlYWRfYnl0ZV9kYXRhKDB4NmIsIDB4MDApCiAgICAgICAgI3ByaW50ICJpMmMucmVhZF9ieXRlX2RhdGEoMHg2YiwgMHgwMCk9IixkYXRhCiAgICBleGNlcHQgSU9FcnJvcjoKICAgICAgICBkYXRhID0gMHgwMAoKICAgIGlmKGRhdGEgPT0gMHhjYyk6CiAgICAgICAgaTJjLndyaXRlX2J5dGVfZGF0YSgweDZiLCAweDAwLCAweDAwKQogICAgICAgIG9zLnN5c3RlbSgic3VkbyBzaHV0ZG93biAtaCBub3ciKQogICAgICAgIHRpbWUuc2xlZXAoNjApCgogICAgY3B1X3RtcD1kZWMyQkNEKGludChnZXRDUFV0ZW1wZXJhdHVyZSgpLDEwKSkKICAgICNwcmludCgiREVCVUcgZGVjMkJDRChpbnQoZ2V0Q1BVdGVtcGVyYXR1cmUoKSwxMCkpOiIsZGVjMkJDRChpbnQoZ2V0Q1BVdGVtcGVyYXR1cmUoKSwxMCkpKQogICAgI3ByaW50KCJERUJVRyBpbnQoZ2V0Q1BVdGVtcGVyYXR1cmUoKSwxMCk6IixpbnQoZ2V0Q1BVdGVtcGVyYXR1cmUoKSwxMCkpCgogICAgdHJ5OgogICAgICAgIGkyYy53cml0ZV9ieXRlX2RhdGEoMHg2OSwgMHgxYSwgY3B1X3RtcCkKICAgIGV4Y2VwdCBJT0Vycm9yOgogICAgICAgIGRhdGEgPSAweDAwCgoKIyMjIyMjIyMjIyMjIyMjIE1BSU4gIyMjIyMjIyMjIyMjIyMjIyMKdCA9IHRocmVhZGluZy5UaW1lcigwLjQwLCB0aW1lcl9pbnQpCnQuc3RhcnQoKQoKd2hpbGUgVHJ1ZToKICAgI3ByaW50KCJERUJVRzogaW5zaWRlIG9mIHRoZSBsb29wIikKICAgdGltZS5zbGVlcCgzMCkK'
+	upis_systemd_script_path = '/sbin/pico_i2c_service.py'
+
 
 	def __init__(self):
 		logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(message)s' )
@@ -123,6 +140,7 @@ class picoUPS:
 		try:
 			import serial
 			self.capability['serial'] = serial
+			assert (serial.Serial)	# make sure its the serial port communication module, not data serialisation module
 			logging.debug('Capability "serial" is available')
 		except:
 			self.capability['serial'] = None
@@ -159,7 +177,163 @@ class picoUPS:
 	# setup system features, TODO
 	def config_setup(self):
 		logging.debug('Running "config setup" mode')
-		return False
+		
+
+		# verify pip is installed
+		#if sys.version_info[0] < 3:
+		cmdret = self.runcmd('which pip')
+		if cmdret[0] is not None:
+			if cmdret[0]==0:
+				logging.debug('pip ok')
+			else:
+				logging.warning('pip not installed, installing it')
+				cmdret = self.runcmd('sudo apt install -y python-pip')
+				if cmdret[0] is not None:
+					if cmdret[0]==0:
+						logging.debug('pip installed')
+					else:
+						logging.error('Failed to install pip')
+						return False
+				else:
+					logging.error('Error running pip install command')
+					return False
+		else:
+			logging.error('Error checking pip presence')
+			return False
+
+
+		if self.capability['serial'] is None:
+			logging.warning('module pyserial not installed, installing it')
+			self.install_module('pyserial')
+		else:
+			logging.debug('pyserial ok')
+
+		if self.capability['smbus'] is None:
+			logging.warning('module smbus not installed, installing it')
+			self.install_module('smbus')
+		else:
+			logging.debug('smbus ok')
+
+		if self.capability['progress'] is None:
+			logging.warning('module progress not installed, installing it')
+			self.install_module('progress')
+		else:
+			logging.debug('smbus ok')
+		
+		try:
+			self.capability['smbus'].SMBus(self.i2cbusid)
+		except IOError as e:
+			if e.errno == 2:
+				logging.warning('seems that smbus is not configured, configuring it')
+
+				self.set_in_file('dtparam=i2c_arm=', "\ndtparam=i2c_arm=on", '/boot/cmdline.txt')
+				self.set_in_file('dtparam=i2c1_baudrate=', 'dtparam=i2c1_baudrate=25000', '/boot/cmdline.txt')
+				self.set_in_file('dtparam=i2c1=', 'dtparam=i2c1=on', '/boot/cmdline.txt')
+				self.set_in_file('i2c-bcm2708', 'i2c-bcm2708', '/etc/modules')
+				self.set_in_file('i2c-dev', 'i2c-dev', '/etc/modules')
+				self.set_in_file('rtc-ds1307', 'rtc-ds1307', '/etc/modules')
+
+				self.load_module('i2c_bcm2708')
+				self.load_module('i2c_dev')
+				self.load_module('rtc_ds1307')
+
+			else:
+				logging.exception('Failed to verify smbus is working')	
+		except:
+			logging.warning('smbus module not available')
+
+
+		if not os.path.exists(self.upis_systemd_script_path):
+			logging.warning('pico systemd script does not exist, creating it')
+			try:
+				open('{0}'.format(self.upis_systemd_script_path), 'wb').write(base64.b64decode(self.upis_systemd_script))
+				logging.warning('pico systemd script created')
+			except:
+				logging.exception('Failed to install pico systemd script to {0}'.format(self.upis_systemd_script_path))
+		else:
+			logging.warning('pico systemd script ok')
+			
+		if not os.path.exists(self.upis_systemd_path):
+			logging.warning('pico systemd service definition does not exist, creating it')
+			try:
+				open('{0}'.format(self.upis_systemd_path), 'wb').write(base64.b64decode(self.upis_systemd))
+				logging.warning('pico systemd service definition created')
+			except:
+				logging.exception('Failed to install pico systemd service definition to {0}'.format(self.upis_systemd_path))
+		else:
+			logging.warning('pico systemd service definition ok')
+
+
+
+
+	def load_module(self, modname):
+		cmdret = self.runcmd("lsmod | grep -q '^{0}'".format(modname))
+		if cmdret[0] is not None:
+			if cmdret[0]==0:
+				logging.debug('module {0} ok'.format(modname))
+				return True
+			else:
+				cmdret = self.runcmd("sudo modprobe {0}".format(modname))
+				if cmdret[0] is not None:
+					if cmdret[0]==0:
+						logging.debug('module {0} loaded'.format(modname))
+						return True
+					else:
+						logging.error('Failed to load module {0}'.format(modname))
+						return False
+				else:
+					logging.error('Error loading module {0}'.format(modname))
+					return False		
+		else:
+			logging.error('Error checking for module {0}'.format(modname))
+			return False		
+
+
+	def install_module(self, name):
+		cmdret = self.runcmd('pip install {0}'.format(name))
+		if cmdret[0] is not None:
+			if cmdret[0]==0:
+				logging.debug('{0} installed'.format(name))
+				return True
+			else:
+				logging.error('Failed to install {0}'.format(name))
+				return False
+		else:
+			logging.error('Error running {0} install command'.format(name))
+			return False		
+
+	def set_in_file(self, file_str, file_fullstr, file_name):
+		cmdret = self.runcmd("grep -q '^{0}' {1}".format(file_str, file_name))
+		if cmdret[0] is not None:
+			if cmdret[0]==0:
+				logging.debug('{0} ok in {1}'.format(file_str, file_name))
+			else:
+				logging.warning('configuring {0} in {1}'.format(file_fullstr, file_name))
+				cmdret = self.runcmd("echo '{0}' | sudo tee -a {1}".format(file_fullstr, file_name))
+				if cmdret[0] is not None:
+					if cmdret[0]==0:
+						logging.debug('{0} configured in {1}'.format(file_str, file_name))
+					else:
+						logging.error('Failed to configure {0} in {1}'.format(file_str, file_name))
+						return False
+				else:
+					logging.error('Error configuring for {0} in {1}'.format(file_str, file_name))
+					return False
+		else:
+			logging.error('Error checking for {0} in {1}'.format(file_str, file_name))
+			return False
+
+
+	def runcmd(self, cmd):
+		try:
+			logging.debug('Running command: "{0}"'.format(cmd))
+			ret = getstatusoutput(cmd)
+			logging.debug('Command finished with result code {0} and output "{1}"'.format(ret[0],ret[1]))
+			return ret
+		except:
+			logging.exception('Failed to execute command')
+			return (None, None)
+
 
 	# initiate FW update
 	def upload_firmware(self):
