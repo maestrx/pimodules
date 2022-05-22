@@ -17,40 +17,40 @@
 #
 # BUGS:         TBD
 # AUTHOR:       Vit SAFAR <PIco@safar.info>
-# VERSION:      v0.2, 10.5.2022
-# HISTORY:      - v0.2, 10.5/2022, I2C retry implemented, removed hardcoded sleep functions
+# VERSION:      v0.3, 22.5.2022
+# HISTORY:      - v0.3, 22.5.2022, added setup feature, its configuring RPI to enable pico features
+#				- v0.2, 10.5,2022, I2C retry implemented, removed hardcoded sleep functions
 #			 	- v0.1, 8.5.2022, Initial release
 #
-# VALIDATED ON: RPi4 with UPS Pico HV4.0B/C
+# VALIDATED ON: RPi4 running Bullseye with UPS Pico HV4.0B/C
 # PYTHON:       python2 & python3
 #
 # TODO:         
-# - Script pre-requisities verification & installation (configure boot params, enable I2C&serial, etc). /boot/config.txt: dtparam=i2c_arm=on dtparam=i2c1_baudrate=25000
 # - Check that the FW in the file is newer than the one already running (overridable) 
-# - Manage the pico_i2c.service
-# - Enable RTC
 # - Manage OS return codes properly
+# - Finish help in argparse
 #
-# if future 
-# ModuleNotFoundError: No module named 'future'
-# sudo apt install python-future
 #===============================================================================
 
 from __future__ import print_function
+import sys
 try:
 	from future import standard_library
 	standard_library.install_aliases()
 except:
-	pass
+	if sys.version_info[0] < 3:
+		print ("\n\nInstall future module first by running: sudo apt install python-future!\n\n")
+		raise
 from subprocess import getoutput, getstatusoutput
 import time
-import sys
 import logging
 import re
 import argparse
 import hashlib
 import base64
 import os.path
+import stat
+
 
 class picoUPS:
 	args = None
@@ -64,7 +64,7 @@ class picoUPS:
     # base64.b64encode(x)
 	upis_systemd = 'CltVbml0XQpEZXNjcmlwdGlvbj1VUFMgUEljbyBHUElPIEZyZWUgUmFzcGJlcnJ5IFBpIEludGVyYWN0aW9uIFNlcnZpY2UKQWZ0ZXI9bXVsdGktdXNlci50YXJnZXQKW1NlcnZpY2VdClR5cGU9aWRsZQpFeGVjU3RhcnQ9L3NiaW4vcGljb19pMmNfc2VydmljZS5weQpTdGFuZGFyZE91dHB1dD1pbmhlcml0ClN0YW5kYXJkRXJyb3I9aW5oZXJpdApSZXN0YXJ0PWFsd2F5cwpbSW5zdGFsbF0KV2FudGVkQnk9bXVsdGktdXNlci50YXJnZXQK'
 	upis_systemd_path = '/lib/systemd/system/pico_i2c.service'
-	upis_systemd_script = 'IyEvdXNyL2Jpbi9lbnYgcHl0aG9uCiMgLSotIGNvZGluZzogdXRmLTggLSotCiMgV3JpdHRlbiBieSBJb2FubmlzIEEuIE1vdXJ0c2lhZGlzIGluZm9AcGltb2R1bGVzLmNvbQojIHRpbWVyIGJhc2VkIGludGVycnVwdCBkYWVtb24gc3VwcG9ydGluZyBVUFMgUEljbyBIVjQuMAojIFZlcnNpb24gMi4wIFJlbGFzZSBEYXRlIDAxLjAxLjIwMjEKCgppbXBvcnQgc3lzCmltcG9ydCB0aW1lCmltcG9ydCBkYXRldGltZQppbXBvcnQgb3MKaW1wb3J0IHJlCmltcG9ydCBnZXRvcHQKaW1wb3J0IHNtYnVzCmltcG9ydCB0aW1lCmltcG9ydCBkYXRldGltZQppbXBvcnQgdGhyZWFkaW5nCgojWW91IGNhbiBpbnN0YWxsIHBzdXRpbCB1c2luZzogc3VkbyBwaXAgaW5zdGFsbCBwc3V0aWwKI2ltcG9ydCBwc3V0aWwKCmkyYyA9IHNtYnVzLlNNQnVzKDEpCgoKIyMjIyMjIyMjIyMjIyMjIEZVTkNUSU9OUyAjIyMjIyMjIyMjIyMjIyMjIyMjCgpkZWYgZGVjMkJDRChpbnB1dFZhbHVlKToKICAgIHg9c3RyKGlucHV0VmFsdWUpCiAgICBCQ0RPdXQgPSAwCiAgICBmb3IgY2hhciBpbiB4OgogICAgICAgIEJDRE91dCA9IChCQ0RPdXQgPDwgNCkgKyBpbnQoY2hhcikKICAgIHJldHVybiBCQ0RPdXQKCmRlZiBnZXRDUFV0ZW1wZXJhdHVyZSgpOgogICAgcmVzID0gb3MucG9wZW4oJ3ZjZ2VuY21kIG1lYXN1cmVfdGVtcCcpLnJlYWRsaW5lKCkKICAgIGNwdV9kYXRhPXJlcy5yZXBsYWNlKCJ0ZW1wPSIsIiIpLnJlcGxhY2UoIidDCiIsIiIpCiAgICBjcHVfaW50PWludChmbG9hdChjcHVfZGF0YSkpCiAgICByZXR1cm4gZm9ybWF0KGNwdV9pbnQsIjAyZCIpCgpkZWYgdGltZXJfaW50KCk6CiAgICAjcHJpbnQgKCItLS0tLS0tLS0tLS0tLS0gREVCVUc6IFRpbWVyIEZpcmVkIC0tLS0tLS0tLS0tLS0tLSIpCiAgICB0PXRocmVhZGluZy5UaW1lcigwLjI1LCB0aW1lcl9pbnQpCiAgICB0LnN0YXJ0KCkKICAgIHRyeToKICAgICAgICBkYXRhID0gaTJjLnJlYWRfYnl0ZV9kYXRhKDB4NmIsIDB4MDApCiAgICAgICAgI3ByaW50ICJpMmMucmVhZF9ieXRlX2RhdGEoMHg2YiwgMHgwMCk9IixkYXRhCiAgICBleGNlcHQgSU9FcnJvcjoKICAgICAgICBkYXRhID0gMHgwMAoKICAgIGlmKGRhdGEgPT0gMHhjYyk6CiAgICAgICAgaTJjLndyaXRlX2J5dGVfZGF0YSgweDZiLCAweDAwLCAweDAwKQogICAgICAgIG9zLnN5c3RlbSgic3VkbyBzaHV0ZG93biAtaCBub3ciKQogICAgICAgIHRpbWUuc2xlZXAoNjApCgogICAgY3B1X3RtcD1kZWMyQkNEKGludChnZXRDUFV0ZW1wZXJhdHVyZSgpLDEwKSkKICAgICNwcmludCgiREVCVUcgZGVjMkJDRChpbnQoZ2V0Q1BVdGVtcGVyYXR1cmUoKSwxMCkpOiIsZGVjMkJDRChpbnQoZ2V0Q1BVdGVtcGVyYXR1cmUoKSwxMCkpKQogICAgI3ByaW50KCJERUJVRyBpbnQoZ2V0Q1BVdGVtcGVyYXR1cmUoKSwxMCk6IixpbnQoZ2V0Q1BVdGVtcGVyYXR1cmUoKSwxMCkpCgogICAgdHJ5OgogICAgICAgIGkyYy53cml0ZV9ieXRlX2RhdGEoMHg2OSwgMHgxYSwgY3B1X3RtcCkKICAgIGV4Y2VwdCBJT0Vycm9yOgogICAgICAgIGRhdGEgPSAweDAwCgoKIyMjIyMjIyMjIyMjIyMjIE1BSU4gIyMjIyMjIyMjIyMjIyMjIyMKdCA9IHRocmVhZGluZy5UaW1lcigwLjQwLCB0aW1lcl9pbnQpCnQuc3RhcnQoKQoKd2hpbGUgVHJ1ZToKICAgI3ByaW50KCJERUJVRzogaW5zaWRlIG9mIHRoZSBsb29wIikKICAgdGltZS5zbGVlcCgzMCkK'
+	upis_systemd_script = 'IyEvdXNyL2Jpbi9lbnYgcHl0aG9uCiMgLSotIGNvZGluZzogdXRmLTggLSotCiMgV3JpdHRlbiBieSBJb2FubmlzIEEuIE1vdXJ0c2lhZGlzIGluZm9AcGltb2R1bGVzLmNvbQojIHRpbWVyIGJhc2VkIGludGVycnVwdCBkYWVtb24gc3VwcG9ydGluZyBVUFMgUEljbyBIVjQuMAojIFZlcnNpb24gMi4wIFJlbGFzZSBEYXRlIDAxLjAxLjIwMjEKCgppbXBvcnQgc3lzCmltcG9ydCB0aW1lCmltcG9ydCBkYXRldGltZQppbXBvcnQgb3MKaW1wb3J0IHJlCmltcG9ydCBnZXRvcHQKaW1wb3J0IHNtYnVzCmltcG9ydCB0aW1lCmltcG9ydCBkYXRldGltZQppbXBvcnQgdGhyZWFkaW5nCgojWW91IGNhbiBpbnN0YWxsIHBzdXRpbCB1c2luZzogc3VkbyBwaXAgaW5zdGFsbCBwc3V0aWwKI2ltcG9ydCBwc3V0aWwKCmkyYyA9IHNtYnVzLlNNQnVzKDEpCgoKIyMjIyMjIyMjIyMjIyMjIEZVTkNUSU9OUyAjIyMjIyMjIyMjIyMjIyMjIyMjCgpkZWYgZGVjMkJDRChpbnB1dFZhbHVlKToKICAgIHg9c3RyKGlucHV0VmFsdWUpCiAgICBCQ0RPdXQgPSAwCiAgICBmb3IgY2hhciBpbiB4OgogICAgICAgIEJDRE91dCA9IChCQ0RPdXQgPDwgNCkgKyBpbnQoY2hhcikKICAgIHJldHVybiBCQ0RPdXQKCmRlZiBnZXRDUFV0ZW1wZXJhdHVyZSgpOgogICAgcmVzID0gb3MucG9wZW4oJ3ZjZ2VuY21kIG1lYXN1cmVfdGVtcCcpLnJlYWRsaW5lKCkKICAgIGNwdV9kYXRhPXJlcy5yZXBsYWNlKCJ0ZW1wPSIsIiIpLnJlcGxhY2UoIidDXG4iLCIiKQogICAgY3B1X2ludD1pbnQoZmxvYXQoY3B1X2RhdGEpKQogICAgcmV0dXJuIGZvcm1hdChjcHVfaW50LCIwMmQiKQoKZGVmIHRpbWVyX2ludCgpOgogICAgI3ByaW50ICgiLS0tLS0tLS0tLS0tLS0tIERFQlVHOiBUaW1lciBGaXJlZCAtLS0tLS0tLS0tLS0tLS0iKQogICAgdD10aHJlYWRpbmcuVGltZXIoMC4yNSwgdGltZXJfaW50KQogICAgdC5zdGFydCgpCiAgICB0cnk6CiAgICAgICAgZGF0YSA9IGkyYy5yZWFkX2J5dGVfZGF0YSgweDZiLCAweDAwKQogICAgICAgICNwcmludCAiaTJjLnJlYWRfYnl0ZV9kYXRhKDB4NmIsIDB4MDApPSIsZGF0YQogICAgZXhjZXB0IElPRXJyb3I6CiAgICAgICAgZGF0YSA9IDB4MDAKCiAgICBpZihkYXRhID09IDB4Y2MpOgogICAgICAgIGkyYy53cml0ZV9ieXRlX2RhdGEoMHg2YiwgMHgwMCwgMHgwMCkKICAgICAgICBvcy5zeXN0ZW0oInN1ZG8gc2h1dGRvd24gLWggbm93IikKICAgICAgICB0aW1lLnNsZWVwKDYwKQoKICAgIGNwdV90bXA9ZGVjMkJDRChpbnQoZ2V0Q1BVdGVtcGVyYXR1cmUoKSwxMCkpCiAgICAjcHJpbnQoIkRFQlVHIGRlYzJCQ0QoaW50KGdldENQVXRlbXBlcmF0dXJlKCksMTApKToiLGRlYzJCQ0QoaW50KGdldENQVXRlbXBlcmF0dXJlKCksMTApKSkKICAgICNwcmludCgiREVCVUcgaW50KGdldENQVXRlbXBlcmF0dXJlKCksMTApOiIsaW50KGdldENQVXRlbXBlcmF0dXJlKCksMTApKQoKICAgIHRyeToKICAgICAgICBpMmMud3JpdGVfYnl0ZV9kYXRhKDB4NjksIDB4MWEsIGNwdV90bXApCiAgICBleGNlcHQgSU9FcnJvcjoKICAgICAgICBkYXRhID0gMHgwMAoKCiMjIyMjIyMjIyMjIyMjIyBNQUlOICMjIyMjIyMjIyMjIyMjIyMjCnQgPSB0aHJlYWRpbmcuVGltZXIoMC40MCwgdGltZXJfaW50KQp0LnN0YXJ0KCkKCndoaWxlIFRydWU6CiAgICNwcmludCgiREVCVUc6IGluc2lkZSBvZiB0aGUgbG9vcCIpCiAgIHRpbWUuc2xlZXAoMzApCgoK'
 	upis_systemd_script_path = '/sbin/pico_i2c_service.py'
 
 
@@ -91,6 +91,11 @@ class picoUPS:
 
 		group_setup = parser.add_argument_group('Setup', 'Setup of the RPi for PICO UPS')
 		group_setup.add_argument('-s', '--config-setup', dest="config_setup", help='', action="store_true")
+		group_setup.add_argument("-u", "--skip-setup-systemd", dest="skip_setup_systemd", help='', action="store_true")
+		group_setup.add_argument("-w", "--skip-setup-progress", dest="skip_setup_progress", help='', action="store_true")
+		group_setup.add_argument("-x", "--skip-setup-rtc", dest="skip_setup_rtc", help='', action="store_true")
+		group_setup.add_argument("-y", "--skip-setup-serial", dest="skip_setup_serial", help='', action="store_true")
+		group_setup.add_argument("-z", "--skip-setup-i2c", dest="skip_setup_i2c", help='', action="store_true")
 		
 		self.args = parser.parse_args()
 
@@ -178,6 +183,9 @@ class picoUPS:
 	def config_setup(self):
 		logging.debug('Running "config setup" mode')
 		
+		if os.getuid() != 0:
+			logging.error('Setup mode must be executed with sudo or as root!')
+			return None
 
 		# verify pip is installed
 		#if sys.version_info[0] < 3:
@@ -187,7 +195,11 @@ class picoUPS:
 				logging.debug('pip ok')
 			else:
 				logging.warning('pip not installed, installing it')
-				cmdret = self.runcmd('sudo apt install -y python-pip')
+				cmdret = self.runcmd('sudo apt update')
+				if sys.version_info[0] < 3:
+					cmdret = self.runcmd('sudo apt install -y python-pip')
+				else:
+					cmdret = self.runcmd('sudo apt install -y python3-pip')
 				if cmdret[0] is not None:
 					if cmdret[0]==0:
 						logging.debug('pip installed')
@@ -201,106 +213,147 @@ class picoUPS:
 			logging.error('Error checking pip presence')
 			return False
 
+		if not self.args.skip_setup_serial:
+			if self.capability['serial'] is None:
+				logging.warning('module pyserial not installed, installing it')
+				self.install_module('pyserial')
+			else:
+				logging.debug('pyserial ok')
 
-		if self.capability['serial'] is None:
-			logging.warning('module pyserial not installed, installing it')
-			self.install_module('pyserial')
-		else:
-			logging.debug('pyserial ok')
+		if not self.args.skip_setup_i2c:
+			if self.capability['smbus'] is None:
+				logging.warning('module smbus not installed, installing it')
+				self.install_module('smbus')
+			else:
+				logging.debug('smbus ok')
 
-		if self.capability['smbus'] is None:
-			logging.warning('module smbus not installed, installing it')
-			self.install_module('smbus')
-		else:
-			logging.debug('smbus ok')
-
-		if self.capability['progress'] is None:
-			logging.warning('module progress not installed, installing it')
-			self.install_module('progress')
-		else:
-			logging.debug('smbus ok')
+		if not self.args.skip_setup_progress:
+			if self.capability['progress'] is None:
+				logging.warning('module progress not installed, installing it')
+				self.install_module('progress')
+			else:
+				logging.debug('smbus ok')
 		
-		try:
-			self.capability['smbus'].SMBus(self.i2cbusid)
-		except IOError as e:
-			if e.errno == 2:
-				logging.warning('seems that smbus is not configured, configuring it')
-
-				self.set_in_file('dtparam=i2c_arm=', "\ndtparam=i2c_arm=on", '/boot/cmdline.txt')
-				self.set_in_file('dtparam=i2c1_baudrate=', 'dtparam=i2c1_baudrate=25000', '/boot/cmdline.txt')
-				self.set_in_file('dtparam=i2c1=', 'dtparam=i2c1=on', '/boot/cmdline.txt')
-				self.set_in_file('i2c-bcm2708', 'i2c-bcm2708', '/etc/modules')
-				self.set_in_file('i2c-dev', 'i2c-dev', '/etc/modules')
-				self.set_in_file('rtc-ds1307', 'rtc-ds1307', '/etc/modules')
-
-				self.load_module('i2c_bcm2708')
-				self.load_module('i2c_dev')
-				self.load_module('rtc_ds1307')
-
-			else:
-				logging.exception('Failed to verify smbus is working')	
-		except:
-			logging.warning('smbus module not available')
-
-
-		if not os.path.exists(self.upis_systemd_script_path):
-			logging.warning('pico systemd script does not exist, creating it')
+		if not self.args.skip_setup_i2c:
 			try:
-				open('{0}'.format(self.upis_systemd_script_path), 'wb').write(base64.b64decode(self.upis_systemd_script))
-				logging.warning('pico systemd script created')
-			except:
-				logging.exception('Failed to install pico systemd script to {0}'.format(self.upis_systemd_script_path))
-		else:
-			logging.warning('pico systemd script ok')
-			
-		if not os.path.exists(self.upis_systemd_path):
-			logging.warning('pico systemd service definition does not exist, creating it')
-			try:
-				open('{0}'.format(self.upis_systemd_path), 'wb').write(base64.b64decode(self.upis_systemd))
-				logging.warning('pico systemd service definition created')
-			except:
-				logging.exception('Failed to install pico systemd service definition to {0}'.format(self.upis_systemd_path))
-		else:
-			logging.warning('pico systemd service definition ok')
+				self.capability['smbus'].SMBus(self.i2cbusid)
+			except IOError as e:
+				if e.errno == 2:
+					logging.warning('seems that smbus is not configured, configuring it')
 
+					# enable_uart= in /boot/config.txt and serial0 in /boot/cmdline.txt
+					# sudo raspi-config nonint do_serial 2 # disable serial console, enable serial HW
+					ret = self.get_service('get_serial')
+					if ret is None or not ret:
+						self.set_service('do_serial', 2)
 
+					# raspi-config nonint get_i2c return 0
+					# sudo raspi-config nonint do_i2c 0 # enable i2c
+					ret = self.get_service('get_i2c')
+					if ret is None or not ret:
+						self.set_service('do_i2c', 0)
 
-
-	def load_module(self, modname):
-		cmdret = self.runcmd("lsmod | grep -q '^{0}'".format(modname))
-		if cmdret[0] is not None:
-			if cmdret[0]==0:
-				logging.debug('module {0} ok'.format(modname))
-				return True
-			else:
-				cmdret = self.runcmd("sudo modprobe {0}".format(modname))
-				if cmdret[0] is not None:
-					if cmdret[0]==0:
-						logging.debug('module {0} loaded'.format(modname))
-						return True
-					else:
-						logging.error('Failed to load module {0}'.format(modname))
-						return False
 				else:
-					logging.error('Error loading module {0}'.format(modname))
-					return False		
-		else:
-			logging.error('Error checking for module {0}'.format(modname))
-			return False		
+					logging.exception('Failed to verify smbus is working')	
+			except:
+				logging.warning('smbus module not available')
 
+		if not self.args.skip_setup_rtc:
+			self.set_in_file('dtoverlay=i2c-rtc,ds1307', 'dtoverlay=i2c-rtc,ds1307', '/boot/config.txt')
+			self.set_in_file('dtparam=i2c1_baudrate=', 'dtparam=i2c1_baudrate=25000', '/boot/config.txt')
 
-	def install_module(self, name):
-		cmdret = self.runcmd('pip install {0}'.format(name))
+		if not self.args.skip_setup_systemd:
+
+			if not os.path.exists(self.upis_systemd_script_path):
+				logging.warning('pico systemd script does not exist, creating it at {0}'.format(self.upis_systemd_script_path))
+				try:
+					open('{0}'.format(self.upis_systemd_script_path), 'wb').write(base64.b64decode(self.upis_systemd_script))
+					logging.warning('pico systemd script created at {0}'.format(self.upis_systemd_script_path))
+
+					file_status = os.stat(self.upis_systemd_script_path)
+					new_chmod = file_status.st_mode | stat.S_IXOTH | stat.S_IXGRP | stat.S_IXUSR
+					logging.warning('Changing chmod of file {0} to {1}'.format(self.upis_systemd_script_path, oct(new_chmod)))
+					os.chmod(self.upis_systemd_script_path, new_chmod)
+
+				except:
+					logging.exception('Failed to install pico systemd script to {0} and setup chmod'.format(self.upis_systemd_script_path))
+			else:
+				logging.warning('pico systemd script ok at {0}'.format(self.upis_systemd_script_path))
+				
+			if not os.path.exists(self.upis_systemd_path):
+				logging.warning('pico systemd service definition does not exist, creating it at {0}'.format(self.upis_systemd_path))
+				try:
+					open('{0}'.format(self.upis_systemd_path), 'wb').write(base64.b64decode(self.upis_systemd))
+					logging.warning('pico systemd service definition created at {0}'.format(self.upis_systemd_path))
+
+					cmdret = self.runcmd("sudo systemctl daemon-reload")
+					if cmdret[0] is not None:
+						if cmdret[0]==0:
+							logging.debug('systemcl reloaded')
+						else:
+							logging.error('Failed to reload systemcl')
+							return False
+					else:
+						logging.error('Error reloading systemcl')
+						return False
+
+					cmdret = self.runcmd("sudo systemctl enable pico_i2c")
+					if cmdret[0] is not None:
+						if cmdret[0]==0:
+							logging.debug('systemcl service pico_i2c enabled')
+						else:
+							logging.error('Failed to enable service pico_i2c')
+							return False
+					else:
+						logging.error('Error enabling service pico_i2c')
+						return False
+
+					cmdret = self.runcmd("sudo systemctl start pico_i2c")
+					if cmdret[0] is not None:
+						if cmdret[0]==0:
+							logging.debug('systemcl service pico_i2c started')
+						else:
+							logging.error('Failed to start service pico_i2c')
+							return False
+					else:
+						logging.error('Error starting service pico_i2c')
+						return False
+				
+				except:
+					logging.exception('Failed to install pico systemd service definition to {0}'.format(self.upis_systemd_path))
+			else:
+				logging.warning('pico systemd service definition ok at {0}'.format(self.upis_systemd_path))
+
+	def set_service(self, servicename, value):
+		cmdret = self.runcmd("sudo raspi-config nonint {0} {1}".format(servicename, value))
 		if cmdret[0] is not None:
 			if cmdret[0]==0:
-				logging.debug('{0} installed'.format(name))
+				logging.debug('Service {0} was set to {1}'.format(servicename, value))
 				return True
 			else:
-				logging.error('Failed to install {0}'.format(name))
-				return False
+				logging.error('Failed to set status of service {0} to {1}'.format(servicename, value))
+				return None
 		else:
-			logging.error('Error running {0} install command'.format(name))
-			return False		
+			logging.error('Failed to set status of service {0} to {1}'.format(servicename, value))
+			return None	
+
+	# cmd output value: 0 -> enabled, 1 -> disabled
+	def get_service(self, servicename):
+		cmdret = self.runcmd("sudo raspi-config nonint {0}".format(servicename))
+		if cmdret[0] is not None:
+			if cmdret[0]==0:
+				if cmdret[1].startswith('0'):
+					logging.debug('Status of service {0} is {1}, True'.format(servicename, cmdret[1]))
+					return True
+				else:
+					logging.debug('Status of service {0} is {1}, False'.format(servicename, cmdret[1]))
+					return False
+			else:
+				logging.error('Failed to check status of service: {0}'.format(servicename))
+				return None
+		else:
+			logging.error('Failed to check status of service:  {0}'.format(servicename))
+			return None	
 
 	def set_in_file(self, file_str, file_fullstr, file_name):
 		cmdret = self.runcmd("grep -q '^{0}' {1}".format(file_str, file_name))
@@ -323,7 +376,6 @@ class picoUPS:
 			logging.error('Error checking for {0} in {1}'.format(file_str, file_name))
 			return False
 
-
 	def runcmd(self, cmd):
 		try:
 			logging.debug('Running command: "{0}"'.format(cmd))
@@ -333,7 +385,6 @@ class picoUPS:
 		except:
 			logging.exception('Failed to execute command')
 			return (None, None)
-
 
 	# initiate FW update
 	def upload_firmware(self):
@@ -386,7 +437,6 @@ class picoUPS:
 		else:
 			logging.debug('smbus capability not available, skipping bootloader config')
 
-
 		# connect to UPIS via Serial
 		try:
 			logging.debug('Opening serial port {0} with baudrate {1}bps'.format(self.args.serial_port,self.args.baud_rate))
@@ -402,7 +452,6 @@ class picoUPS:
 		else:
 			logging.error('Failed to establish serial communication with PICO UPS')
 			return False
-		
 
 		# do FW update
 		if self.send_file():
@@ -600,6 +649,7 @@ class picoUPS:
 		except:
 			return value
 
+
 # simple implementation fo the progress bar showing progress of teh FW update
 class simpleBar:
 	def __init__(self, text, total):
@@ -625,5 +675,3 @@ class simpleBar:
 
 if __name__ == "__main__":
 	picoUPS()
-
-
