@@ -145,7 +145,7 @@ class picoUPS:
 		try:
 			import serial
 			self.capability['serial'] = serial
-			assert (serial.Serial)	# make sure its the serial port communication module, not data serialisation module
+			assert (serial.Serial)	# make sure its the serial port communication module, not data serialisation module (modul ename clonflict)
 			logging.debug('Capability "serial" is available')
 		except:
 			self.capability['serial'] = None
@@ -217,35 +217,37 @@ class picoUPS:
 			if self.capability['serial'] is None:
 				logging.warning('module pyserial not installed, installing it')
 				self.install_module('pyserial')
+				self.get_capabilities()
 			else:
 				logging.debug('pyserial ok')
 
-		if not self.args.skip_setup_i2c:
-			if self.capability['smbus'] is None:
-				logging.warning('module smbus not installed, installing it')
-				self.install_module('smbus')
-			else:
-				logging.debug('smbus ok')
+			# enable_uart= in /boot/config.txt and serial0 in /boot/cmdline.txt
+			# sudo raspi-config nonint do_serial 2 # disable serial console, enable serial HW
+			ret = self.get_service('get_serial')
+			if ret is None or not ret:
+				self.set_service('do_serial', 2)
 
 		if not self.args.skip_setup_progress:
 			if self.capability['progress'] is None:
 				logging.warning('module progress not installed, installing it')
 				self.install_module('progress')
+				self.get_capabilities()
 			else:
 				logging.debug('smbus ok')
-		
+
 		if not self.args.skip_setup_i2c:
+			if self.capability['smbus'] is None:
+				logging.warning('module smbus not installed, installing it')
+				self.install_module('smbus')
+				self.get_capabilities()
+			else:
+				logging.debug('smbus ok')
+
 			try:
 				self.capability['smbus'].SMBus(self.i2cbusid)
 			except IOError as e:
 				if e.errno == 2:
 					logging.warning('seems that smbus is not configured, configuring it')
-
-					# enable_uart= in /boot/config.txt and serial0 in /boot/cmdline.txt
-					# sudo raspi-config nonint do_serial 2 # disable serial console, enable serial HW
-					ret = self.get_service('get_serial')
-					if ret is None or not ret:
-						self.set_service('do_serial', 2)
 
 					# raspi-config nonint get_i2c return 0
 					# sudo raspi-config nonint do_i2c 0 # enable i2c
@@ -256,7 +258,7 @@ class picoUPS:
 				else:
 					logging.exception('Failed to verify smbus is working')	
 			except:
-				logging.warning('smbus module not available')
+				logging.exception('smbus module not available')
 
 		if not self.args.skip_setup_rtc:
 			self.set_in_file('dtoverlay=i2c-rtc,ds1307', 'dtoverlay=i2c-rtc,ds1307', '/boot/config.txt')
@@ -385,6 +387,19 @@ class picoUPS:
 		except:
 			logging.exception('Failed to execute command')
 			return (None, None)
+
+	def install_module(self, name):
+		cmdret = self.runcmd('pip install {0}'.format(name))
+		if cmdret[0] is not None:
+			if cmdret[0]==0:
+				logging.debug('{0} installed'.format(name))
+				return True
+			else:
+				logging.error('Failed to install {0}'.format(name))
+				return False
+		else:
+			logging.error('Error running {0} install command'.format(name))
+			return False
 
 	# initiate FW update
 	def upload_firmware(self):
