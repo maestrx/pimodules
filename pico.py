@@ -17,7 +17,7 @@
 #
 # BUGS:         TBD
 # AUTHOR:       Vit SAFAR <PIco@safar.info>
-# VERSION:      v0.3, 22.5.2022
+# VERSION:      v0.3a, 22.5.2022
 # HISTORY:      - v0.3, 22.5.2022, added setup feature, its configuring RPI to enable pico features
 #				- v0.2, 10.5,2022, I2C retry implemented, removed hardcoded sleep functions
 #			 	- v0.1, 8.5.2022, Initial release
@@ -29,6 +29,7 @@
 # - Check that the FW in the file is newer than the one already running (overridable) 
 # - Manage OS return codes properly
 # - Finish help in argparse
+# - create configure mode
 #
 #===============================================================================
 
@@ -224,7 +225,7 @@ class picoUPS:
 			# enable_uart= in /boot/config.txt and serial0 in /boot/cmdline.txt
 			# sudo raspi-config nonint do_serial 2 # disable serial console, enable serial HW
 			ret = self.get_service('get_serial')
-			if ret is None or not ret:
+			if ret is None or ret.startswith('0'):
 				self.set_service('do_serial', 2)
 
 		if not self.args.skip_setup_progress:
@@ -252,7 +253,7 @@ class picoUPS:
 					# raspi-config nonint get_i2c return 0
 					# sudo raspi-config nonint do_i2c 0 # enable i2c
 					ret = self.get_service('get_i2c')
-					if ret is None or not ret:
+					if ret is None or ret.startswith('1'):
 						self.set_service('do_i2c', 0)
 
 				else:
@@ -260,12 +261,11 @@ class picoUPS:
 			except:
 				logging.exception('smbus module not available')
 
-		if not self.args.skip_setup_rtc:
+		if not self.args.skip_setup_rtc and not self.args.skip_setup_i2c:
 			self.set_in_file('dtoverlay=i2c-rtc,ds1307', 'dtoverlay=i2c-rtc,ds1307', '/boot/config.txt')
 			self.set_in_file('dtparam=i2c1_baudrate=', 'dtparam=i2c1_baudrate=25000', '/boot/config.txt')
 
 		if not self.args.skip_setup_systemd:
-
 			if not os.path.exists(self.upis_systemd_script_path):
 				logging.warning('pico systemd script does not exist, creating it at {0}'.format(self.upis_systemd_script_path))
 				try:
@@ -330,7 +330,7 @@ class picoUPS:
 		cmdret = self.runcmd("sudo raspi-config nonint {0} {1}".format(servicename, value))
 		if cmdret[0] is not None:
 			if cmdret[0]==0:
-				logging.debug('Service {0} was set to {1}'.format(servicename, value))
+				logging.warning('Service {0} was set to {1}'.format(servicename, value))
 				return True
 			else:
 				logging.error('Failed to set status of service {0} to {1}'.format(servicename, value))
@@ -344,12 +344,7 @@ class picoUPS:
 		cmdret = self.runcmd("sudo raspi-config nonint {0}".format(servicename))
 		if cmdret[0] is not None:
 			if cmdret[0]==0:
-				if cmdret[1].startswith('0'):
-					logging.debug('Status of service {0} is {1}, True'.format(servicename, cmdret[1]))
-					return True
-				else:
-					logging.debug('Status of service {0} is {1}, False'.format(servicename, cmdret[1]))
-					return False
+				return cmdret[1]
 			else:
 				logging.error('Failed to check status of service: {0}'.format(servicename))
 				return None
