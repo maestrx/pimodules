@@ -250,6 +250,7 @@ class picoUPS:
 				if e.errno == 2:
 					logging.warning('seems that smbus is not configured, configuring it')
 
+					self.set_in_file('dtparam=i2c1_baudrate=', 'dtparam=i2c1_baudrate=25000', '/boot/config.txt')
 					# raspi-config nonint get_i2c return 0
 					# sudo raspi-config nonint do_i2c 0 # enable i2c
 					ret = self.get_service('get_i2c')
@@ -263,7 +264,7 @@ class picoUPS:
 
 		if not self.args.skip_setup_rtc and not self.args.skip_setup_i2c:
 			self.set_in_file('dtoverlay=i2c-rtc,ds1307', 'dtoverlay=i2c-rtc,ds1307', '/boot/config.txt')
-			self.set_in_file('dtparam=i2c1_baudrate=', 'dtparam=i2c1_baudrate=25000', '/boot/config.txt')
+
 
 		if not self.args.skip_setup_systemd:
 			if not os.path.exists(self.upis_systemd_script_path):
